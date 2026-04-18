@@ -461,7 +461,8 @@ function renderHome() {
       </div>
       <h1 class="hero-title">不想再<span class="em">刷屏扰民</span>了，<br/>就把它们挂在这里。</h1>
       <p class="hero-lede">每一件都是我本人用过、愿意讲清楚来龙去脉的物品。感兴趣就留言或者排个队，我们一个个来——不用一遍遍发照片在群里、不用来回发PDF，拒绝扰民。</p>
-    </section>
+      <p class="hero-lede">Note: 有任何关于物品的问题请直接在物品下方留言，看到后第一时间会答复，确认购买后再加微信，节约彼此时间</p>
+      </section>
 
     <section class="container">
       <div class="filters" id="filters"></div>
