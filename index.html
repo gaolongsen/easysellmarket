@@ -1116,6 +1116,9 @@ h3 { font-size: 1.25rem; }
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%) translateY(120%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
   background: var(--ink);
   color: var(--bg);
   padding: 12px 20px;
@@ -1123,13 +1126,17 @@ h3 { font-size: 1.25rem; }
   font-size: .9rem;
   z-index: 200;
   box-shadow: var(--shadow-lg);
-  transition: transform .35s cubic-bezier(.2,.8,.2,1);
+  transition: transform .35s cubic-bezier(.2,.8,.2,1), opacity .2s ease;
   max-width: calc(100vw - 40px);
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
 }
-.toast.show { transform: translateX(-50%) translateY(0); }
+.toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  visibility: visible;
+}
 .toast.err { background: var(--accent-dark); }
 
 /* =========================================================
