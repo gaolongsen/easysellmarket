@@ -455,12 +455,12 @@ function renderHome() {
       <div class="hero-meta">
         <span>EST. ${new Date().getFullYear()}</span>
         <span class="sep"></span>
-        <span>个人二手好物</span>
+        <span>个人二手物品</span>
         <span class="sep"></span>
         <span>${countAvail} 件在售 · ${countSold} 件已售</span>
       </div>
       <h1 class="hero-title">不想再<span class="em">刷屏</span>了，<br/>就把它们挂在这里。</h1>
-      <p class="hero-lede">每一件都是我用过、认真拍过、愿意讲清楚来龙去脉的物品。感兴趣就留言或者排个队，我们一个个来——不用抢红包、不用斗图、不用发 100 张图到群里。</p>
+      <p class="hero-lede">每一件都是我本人用过、愿意讲清楚来龙去脉的物品。感兴趣就留言或者排个队，我们一个个来——不用一遍遍发照片在群里、不用来回发PDF，拒绝扰民。</p>
     </section>
 
     <section class="container">
