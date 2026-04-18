@@ -61,6 +61,64 @@ const toast = (msg, type = "") => {
   toast._t = setTimeout(() => { t.className = "toast"; }, 2400);
 };
 
+const GOOGLE_MAPS_API_KEY = window.GOOGLE_MAPS_API_KEY || "";
+
+function fmtApproxCoords(lat, lng) {
+  if (typeof lat !== "number" || typeof lng !== "number") return "";
+  return `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
+}
+
+function extractApproxLocationLabel(geocodeResult) {
+  if (!geocodeResult || !Array.isArray(geocodeResult.address_components)) return "";
+  const comps = geocodeResult.address_components;
+  const pick = (...types) => {
+    const match = comps.find(c => types.some(type => c.types.includes(type)));
+    return match ? match.long_name : "";
+  };
+  const area = pick("sublocality_level_1", "sublocality", "neighborhood");
+  const city = pick("locality", "administrative_area_level_2", "administrative_area_level_1");
+  return [area, city].filter(Boolean).join(", ") || geocodeResult.formatted_address || "";
+}
+
+async function reverseGeocodeApproxLocation(lat, lng) {
+  if (!GOOGLE_MAPS_API_KEY) return { label: fmtApproxCoords(lat, lng), source: "coords" };
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(`${lat},${lng}`)}&key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Google Geocoding request failed");
+  const data = await res.json();
+  const top = Array.isArray(data.results) ? data.results[0] : null;
+  return {
+    label: extractApproxLocationLabel(top) || fmtApproxCoords(lat, lng),
+    source: "google",
+  };
+}
+
+function fillLocationFields(location) {
+  const labelInput = $("#f-location");
+  const latInput = $("#f-location-lat");
+  const lngInput = $("#f-location-lng");
+  const sourceInput = $("#f-location-source");
+  if (labelInput) labelInput.value = location && location.label ? location.label : "";
+  if (latInput) latInput.value = location && typeof location.lat === "number" ? String(location.lat) : "";
+  if (lngInput) lngInput.value = location && typeof location.lng === "number" ? String(location.lng) : "";
+  if (sourceInput) sourceInput.value = location && location.source ? location.source : "";
+}
+
+function readLocationFields() {
+  const label = ($("#f-location") && $("#f-location").value.trim()) || "";
+  const latRaw = ($("#f-location-lat") && $("#f-location-lat").value) || "";
+  const lngRaw = ($("#f-location-lng") && $("#f-location-lng").value) || "";
+  const source = ($("#f-location-source") && $("#f-location-source").value.trim()) || "";
+  const lat = latRaw === "" ? null : Number(latRaw);
+  const lng = lngRaw === "" ? null : Number(lngRaw);
+  return {
+    label,
+    lat: Number.isFinite(lat) ? lat : null,
+    lng: Number.isFinite(lng) ? lng : null,
+    source,
+  };
+}
+
 function reloadCurrentPage() {
   const hash = location.hash || "";
   const url = new URL(location.href);
@@ -557,6 +615,10 @@ function paintItem(item) {
   const catLabel = (CATEGORIES.find(c => c.id === item.category) || {}).label || "—";
   const ownerName = getItemOwnerName(item);
   const ownerContact = getItemOwnerContact(item);
+  const locationLabel = item.locationLabel || "";
+  const hasCoords = typeof item.locationLat === "number" && typeof item.locationLng === "number";
+  const mapsQuery = locationLabel || (hasCoords ? fmtApproxCoords(item.locationLat, item.locationLng) : "");
+  const mapsUrl = mapsQuery ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}` : "";
   const ownerLabel = item.ownerType === "publisher" ? "认证发布者" : "店主";
   const contactLabel = item.ownerType === "publisher" ? "发布者联系方式" : "店主联系方式";
 
@@ -596,9 +658,26 @@ function paintItem(item) {
               <div class="tiny">${ownerLabel}</div>
               <div class="val">${esc(ownerName)}</div>
             </div>
+            ${locationLabel ? `
+              <div class="meta-item">
+                <div class="tiny">大致位置</div>
+                <div class="val">${esc(locationLabel)}</div>
+              </div>
+            ` : ""}
           </div>
 
           <div class="description">${esc(item.description || "（暂无描述）")}</div>
+
+          ${locationLabel ? `
+            <div class="queue-box" style="margin-bottom:16px;">
+              <h3>大致位置</h3>
+              <div style="font-size:1rem;color:var(--ink);word-break:break-word;">${esc(locationLabel)}</div>
+              <div class="queue-hint" style="padding-bottom:0;">
+                仅显示大致区域，具体交易点请和发布者联系确认。
+                ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" style="margin-left:8px;color:var(--accent-dark);text-decoration:underline;">在 Google Maps 打开</a>` : ""}
+              </div>
+            </div>
+          ` : ""}
 
           ${ownerContact ? `
             <div class="queue-box" style="margin-bottom:16px;">
@@ -1228,6 +1307,7 @@ let addPhotos = [];
 let editingId = null;
 let editorMode = "admin";
 let editorPublisherCode = "";
+let editorLocation = null;
 
 function renderAdminAdd(existing = null, options = {}) {
   const body = $("#admin-body");
@@ -1242,6 +1322,12 @@ function renderAdminAdd(existing = null, options = {}) {
     addPhotos = [];
   }
   const current = existing || {};
+  editorLocation = {
+    label: current.locationLabel || "",
+    lat: typeof current.locationLat === "number" ? current.locationLat : null,
+    lng: typeof current.locationLng === "number" ? current.locationLng : null,
+    source: current.locationSource || "",
+  };
   const isPublisherEditor = mode === "publisher" || current.ownerType === "publisher";
   editorPublisherCode = isPublisherEditor ? (mode === "publisher" ? ((session && session.code) || "") : (current.publisherCode || "")) : "";
   const ownerNameValue = current.publisherName || ((session && session.publisherName) || "");
@@ -1318,6 +1404,20 @@ function renderAdminAdd(existing = null, options = {}) {
           <label>详细描述</label>
           <textarea id="f-desc" rows="6" placeholder="尺寸、购买时间、使用情况、是否可搬运、交易地点等…" maxlength="2000">${esc(current.description || "")}</textarea>
         </div>
+        <div class="field">
+          <label>大致位置 · 选填</label>
+          <input type="text" id="f-location" maxlength="120" value="${esc(editorLocation.label || "")}" placeholder="例如：Downtown / University District" />
+          <input type="hidden" id="f-location-lat" value="${editorLocation.lat != null ? esc(String(editorLocation.lat)) : ""}" />
+          <input type="hidden" id="f-location-lng" value="${editorLocation.lng != null ? esc(String(editorLocation.lng)) : ""}" />
+          <input type="hidden" id="f-location-source" value="${esc(editorLocation.source || "")}" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+            <button class="btn ghost small" type="button" id="f-use-location">获取我附近的大致位置</button>
+            <button class="btn ghost small" type="button" id="f-clear-location">清除位置</button>
+          </div>
+          <div class="queue-hint" style="padding:0;margin-top:8px;">
+            会尽量只保存大致区域，不建议填写精确门牌。要自动反查 Google 地图区域名，需在 index.html 配置 window.GOOGLE_MAPS_API_KEY。
+          </div>
+        </div>
         <div>
           <button class="btn accent" id="f-save">${editingId ? "保存修改" : (mode === "publisher" ? "发布这件闲置" : "上架这件物品")}</button>
           ${editingId ? `<button class="btn ghost" style="margin-left:8px;" onclick="cancelEdit()">取消</button>` : ""}
@@ -1339,8 +1439,56 @@ function renderAdminAdd(existing = null, options = {}) {
   fileIn.onchange = () => handleFiles(Array.from(fileIn.files));
 
   $("#f-save").onclick = doSaveItem;
+  $("#f-use-location").onclick = requestApproxLocation;
+  $("#f-clear-location").onclick = () => {
+    editorLocation = { label: "", lat: null, lng: null, source: "" };
+    fillLocationFields(editorLocation);
+  };
 
   paintPreviews();
+}
+
+async function requestApproxLocation() {
+  if (!navigator.geolocation) {
+    toast("当前浏览器不支持定位", "err");
+    return;
+  }
+  const btn = $("#f-use-location");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "定位中...";
+  }
+  try {
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 300000,
+      });
+    });
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    const rough = await reverseGeocodeApproxLocation(lat, lng).catch(() => ({
+      label: fmtApproxCoords(lat, lng),
+      source: "coords",
+    }));
+    editorLocation = {
+      label: rough.label,
+      lat,
+      lng,
+      source: rough.source,
+    };
+    fillLocationFields(editorLocation);
+    toast(rough.source === "google" ? "已获取附近位置 ✓" : "已获取位置坐标，可手动改成更模糊的区域名");
+  } catch (e) {
+    console.error(e);
+    toast("定位失败，请检查浏览器定位权限", "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "获取我附近的大致位置";
+    }
+  }
 }
 
 async function handleFiles(files) {
@@ -1391,6 +1539,11 @@ async function doSaveItem() {
     description: $("#f-desc").value.trim(),
     photos: addPhotos,
   };
+  const location = readLocationFields();
+  payload.locationLabel = location.label || null;
+  payload.locationLat = location.lat;
+  payload.locationLng = location.lng;
+  payload.locationSource = location.source || null;
   if (editorMode === "publisher" || editorPublisherCode || ($("#f-owner-name") && $("#f-owner-contact"))) {
     const publisherName = ($("#f-owner-name") && $("#f-owner-name").value.trim()) || "";
     const publisherContact = ($("#f-owner-contact") && $("#f-owner-contact").value.trim()) || "";
