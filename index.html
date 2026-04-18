@@ -870,6 +870,70 @@ h3 { font-size: 1.25rem; }
   margin-bottom: 22px;
   font-size: .92rem;
 }
+.image-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18,16,13,.82);
+  backdrop-filter: blur(6px);
+  z-index: 160;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.image-viewer {
+  position: relative;
+  width: min(96vw, 1180px);
+  height: min(90vh, 920px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.image-viewer-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  border-radius: 20px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.image-viewer-stage img {
+  max-width: none;
+  max-height: none;
+  transform-origin: center center;
+  transition: transform .18s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.image-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #fff;
+}
+.image-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.image-viewer-btn {
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.1);
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.image-viewer-btn:hover {
+  background: rgba(255,255,255,.18);
+}
+.gallery-main img {
+  cursor: zoom-in;
+}
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
 
@@ -1069,25 +1133,69 @@ h3 { font-size: 1.25rem; }
 .toast.err { background: var(--accent-dark); }
 
 /* =========================================================
-   footer
+   refresh dock
    ========================================================= */
-.footer {
-  border-top: 1px solid var(--border);
-  padding: 40px 0 50px;
-  color: var(--ink-3);
-  font-size: .85rem;
+.footer { display: none; }
+.refresh-dock {
+  position: fixed;
+  left: 50%;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(34px);
+  z-index: 120;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s ease;
+  opacity: .94;
 }
-.footer .f-inner {
+.refresh-dock.open,
+.refresh-dock:hover,
+.refresh-dock:focus-within {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+.refresh-dock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(28,24,19,.94);
+  color: #fff;
+  box-shadow: var(--shadow-lg);
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom) * 0.25);
+  cursor: pointer;
+}
+.refresh-dock-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  flex: 0 0 auto;
+}
+.refresh-dock-copy {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
 }
-.footer .mark {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 1.1rem;
-  color: var(--ink-2);
+.refresh-dock-title {
+  font-size: .88rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.refresh-dock-hint {
+  font-size: .72rem;
+  color: rgba(255,255,255,.72);
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width .24s ease, opacity .18s ease;
+}
+.refresh-dock.open .refresh-dock-hint,
+.refresh-dock:hover .refresh-dock-hint,
+.refresh-dock:focus-within .refresh-dock-hint {
+  max-width: 220px;
+  opacity: 1;
 }
 
 /* =========================================================
@@ -1200,6 +1308,17 @@ h3 { font-size: 1.25rem; }
 
 <!-- toast -->
 <div id="toast" class="toast"></div>
+
+<!-- refresh dock -->
+<div class="refresh-dock" id="refresh-dock">
+  <button class="refresh-dock-btn" id="refresh-dock-btn" type="button" aria-label="刷新最新内容">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
+    <span class="refresh-dock-copy">
+      <span class="refresh-dock-title">刷新最新内容</span>
+      <span class="refresh-dock-hint">点一下重新拉取最新页面</span>
+    </span>
+  </button>
+</div>
 
 <!-- ==================================================
      Firebase config — EDIT THIS

@@ -61,6 +61,47 @@ const toast = (msg, type = "") => {
   toast._t = setTimeout(() => { t.className = "toast"; }, 2400);
 };
 
+function reloadCurrentPage() {
+  const hash = location.hash || "";
+  const url = new URL(location.href);
+  url.searchParams.set("refresh", String(Date.now()));
+  url.hash = hash;
+  location.href = url.toString();
+}
+
+function setupRefreshDock() {
+  const dock = $("#refresh-dock");
+  const btn = $("#refresh-dock-btn");
+  if (!dock || !btn || setupRefreshDock._done) return;
+  setupRefreshDock._done = true;
+
+  let hideTimer = null;
+  const openDock = () => {
+    dock.classList.add("open");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => dock.classList.remove("open"), 2200);
+  };
+  const closeDock = () => {
+    clearTimeout(hideTimer);
+    dock.classList.remove("open");
+  };
+
+  dock.addEventListener("mouseenter", openDock);
+  dock.addEventListener("mouseleave", closeDock);
+  btn.addEventListener("focus", openDock);
+  btn.addEventListener("blur", closeDock);
+  btn.addEventListener("touchstart", (e) => {
+    if (!dock.classList.contains("open")) {
+      e.preventDefault();
+      openDock();
+    }
+  }, { passive: false });
+  btn.addEventListener("click", () => {
+    toast("正在刷新最新内容…");
+    setTimeout(reloadCurrentPage, 120);
+  });
+}
+
 const ADMIN_KEY = "xiaopu_admin_ok";
 const PUBLISHER_KEY = "xiaopu_publisher_session";
 
@@ -623,7 +664,7 @@ function paintGallery(photos) {
   const render = () => {
     wrap.innerHTML = `
       <div class="gallery-main">
-        <img src="${photos[idx]}" alt="" />
+        <img src="${photos[idx]}" alt="" data-open-viewer="${idx}" />
         ${photos.length > 1 ? `
           <button class="gallery-nav prev" id="g-prev"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
           <button class="gallery-nav next" id="g-next"><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
@@ -640,6 +681,10 @@ function paintGallery(photos) {
     const next = $("#g-next");
     if (prev) prev.onclick = () => { idx = (idx - 1 + photos.length) % photos.length; render(); };
     if (next) next.onclick = () => { idx = (idx + 1) % photos.length; render(); };
+    const mainImage = $("[data-open-viewer]", wrap);
+    if (mainImage) {
+      mainImage.onclick = () => openImageViewer(photos, idx);
+    }
     $$(".gallery-thumb", wrap).forEach(t => {
       t.onclick = () => { idx = Number(t.dataset.i); render(); };
     });
@@ -658,6 +703,83 @@ function paintGallery(photos) {
       });
     }
   };
+  render();
+}
+
+function openImageViewer(photos, startIndex = 0) {
+  if (!photos || !photos.length) return;
+  const root = $("#modal-root");
+  if (!root) return;
+
+  let idx = startIndex;
+  let scale = 1;
+  const clampScale = (value) => Math.min(4, Math.max(0.75, value));
+
+  const render = () => {
+    root.innerHTML = `
+      <div class="image-viewer-backdrop" id="image-viewer-backdrop">
+        <div class="image-viewer">
+          <div class="image-viewer-toolbar">
+            <div>${idx + 1} / ${photos.length}</div>
+            <div class="image-viewer-actions">
+              <button class="image-viewer-btn" id="iv-zoom-out" type="button">缩小</button>
+              <button class="image-viewer-btn" id="iv-zoom-reset" type="button">重置</button>
+              <button class="image-viewer-btn" id="iv-zoom-in" type="button">放大</button>
+              ${photos.length > 1 ? `<button class="image-viewer-btn" id="iv-prev" type="button">上一张</button>
+              <button class="image-viewer-btn" id="iv-next" type="button">下一张</button>` : ""}
+              <button class="image-viewer-btn" id="iv-close" type="button">关闭</button>
+            </div>
+          </div>
+          <div class="image-viewer-stage" id="image-viewer-stage">
+            <img src="${photos[idx]}" alt="" id="image-viewer-img" />
+          </div>
+        </div>
+      </div>
+    `;
+
+    const img = $("#image-viewer-img");
+    const stage = $("#image-viewer-stage");
+    const backdrop = $("#image-viewer-backdrop");
+    const applyScale = () => {
+      if (img) img.style.transform = `scale(${scale})`;
+    };
+    applyScale();
+
+    $("#iv-close").onclick = closeModal;
+    $("#iv-zoom-in").onclick = () => { scale = clampScale(scale + 0.25); applyScale(); };
+    $("#iv-zoom-out").onclick = () => { scale = clampScale(scale - 0.25); applyScale(); };
+    $("#iv-zoom-reset").onclick = () => { scale = 1; applyScale(); if (stage) stage.scrollTo({ top: 0, left: 0, behavior: "smooth" }); };
+
+    const goPrev = () => { idx = (idx - 1 + photos.length) % photos.length; scale = 1; render(); };
+    const goNext = () => { idx = (idx + 1) % photos.length; scale = 1; render(); };
+    const prevBtn = $("#iv-prev");
+    const nextBtn = $("#iv-next");
+    if (prevBtn) prevBtn.onclick = goPrev;
+    if (nextBtn) nextBtn.onclick = goNext;
+
+    if (stage) {
+      stage.onwheel = (e) => {
+        e.preventDefault();
+        scale = clampScale(scale + (e.deltaY < 0 ? 0.2 : -0.2));
+        applyScale();
+      };
+    }
+    if (backdrop) {
+      backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+    }
+    document.onkeydown = (e) => {
+      if (!$("#image-viewer-backdrop")) {
+        document.onkeydown = null;
+        return;
+      }
+      if (e.key === "Escape") closeModal();
+      else if (e.key === "ArrowLeft" && photos.length > 1) goPrev();
+      else if (e.key === "ArrowRight" && photos.length > 1) goNext();
+      else if (e.key === "+" || e.key === "=") { scale = clampScale(scale + 0.25); applyScale(); }
+      else if (e.key === "-") { scale = clampScale(scale - 0.25); applyScale(); }
+    };
+  };
+
   render();
 }
 
@@ -798,6 +920,7 @@ function openQueueDialog(itemId) {
 function closeModal() {
   const root = $("#modal-root");
   root.innerHTML = "";
+  document.onkeydown = null;
 }
 window.closeModal = closeModal;
 window.openQueueDialog = openQueueDialog;
@@ -1647,4 +1770,5 @@ route(/^\/publish$/, async () => {
 // ==========================================================
 // boot
 // ==========================================================
+setupRefreshDock();
 runRouter();
