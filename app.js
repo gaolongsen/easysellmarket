@@ -61,6 +61,91 @@ const toast = (msg, type = "") => {
   toast._t = setTimeout(() => { t.className = "toast"; }, 2400);
 };
 
+const ADMIN_KEY = "xiaopu_admin_ok";
+const PUBLISHER_KEY = "xiaopu_publisher_session";
+
+function normalizeCode(code = "") {
+  return String(code).trim().toUpperCase();
+}
+
+function normalizePublisherCodeEntry(entry, id = "") {
+  if (typeof entry === "string") {
+    return { id, code: String(entry).trim(), label: "", enabled: true };
+  }
+  return {
+    id: id || String(entry && entry.id || "").trim(),
+    code: String(entry && entry.code || "").trim(),
+    label: String(entry && entry.label || "").trim(),
+    enabled: entry && entry.enabled !== false,
+    createdAt: entry && entry.createdAt,
+    updatedAt: entry && entry.updatedAt,
+  };
+}
+
+function getPublisherCodes() {
+  if (state.publisherCodesLoaded) return state.publisherCodes;
+  const raw = Array.isArray(window.PUBLISHER_CODES) ? window.PUBLISHER_CODES : [];
+  return raw.map((entry, index) => normalizePublisherCodeEntry(entry, `default-${index + 1}`))
+    .filter(entry => entry.code);
+}
+
+function findPublisherCode(code) {
+  const wanted = normalizeCode(code);
+  return getPublisherCodes().find(entry => entry.enabled && normalizeCode(entry.code) === wanted) || null;
+}
+
+function getPublisherSession() {
+  try {
+    const raw = localStorage.getItem(PUBLISHER_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+function getActivePublisherSession() {
+  const session = getPublisherSession();
+  if (!session || !session.code) return null;
+  const match = findPublisherCode(session.code);
+  if (!match) return null;
+  return {
+    ...session,
+    code: match.code,
+    label: match.label,
+  };
+}
+
+function savePublisherSession(session) {
+  localStorage.setItem(PUBLISHER_KEY, JSON.stringify(session));
+}
+
+function clearPublisherSession() {
+  localStorage.removeItem(PUBLISHER_KEY);
+}
+
+function isAdminMode() { return localStorage.getItem(ADMIN_KEY) === "1"; }
+function isPublisherMode() { return !!getActivePublisherSession(); }
+
+function isPublisherItemOwner(item, session = getActivePublisherSession()) {
+  return !!(session && item && item.ownerType === "publisher" &&
+    normalizeCode(item.publisherCode) === normalizeCode(session.code));
+}
+
+function canEditItem(item) {
+  return isAdminMode() || isPublisherItemOwner(item);
+}
+
+function getItemOwnerName(item) {
+  if (item && item.ownerType === "publisher") return item.publisherName || "认证发布者";
+  return window.SELLER_NAME || "店主";
+}
+
+function getItemOwnerContact(item) {
+  if (item && item.ownerType === "publisher") return item.publisherContact || "";
+  return window.SELLER_WECHAT || "";
+}
+
 // ---------- categories / statuses ----------
 const CATEGORIES = [
   { id: "all", label: "全部" },
@@ -109,6 +194,9 @@ const state = {
   items: [],
   itemsLoaded: false,
   itemsUnsub: null,
+  publisherCodes: [],
+  publisherCodesLoaded: false,
+  publisherCodesUnsub: null,
   currentCategory: "all",
   currentStatusFilter: "all",
 };
@@ -122,10 +210,53 @@ function watchItems() {
       state.itemsLoaded = true;
       if (parseHash() === "/" || parseHash().startsWith("/?")) renderHome();
       if (parseHash() === "/admin") renderAdminDashboard();
+      if (parseHash() === "/publish") renderPublisher();
     }, err => {
       console.error(err);
       toast("加载商品失败，请检查 Firebase 配置", "err");
     });
+}
+
+function watchPublisherCodes() {
+  if (!db || state.publisherCodesUnsub) return;
+  state.publisherCodesUnsub = db.collection("publisherCodes")
+    .orderBy("createdAt", "desc")
+    .onSnapshot(snap => {
+      state.publisherCodes = snap.docs
+        .map(d => normalizePublisherCodeEntry({ id: d.id, ...d.data() }, d.id))
+        .filter(entry => entry.code);
+      state.publisherCodesLoaded = true;
+      const path = parseHash();
+      if (path === "/publish") renderPublisher();
+      if (path === "/admin") renderAdminDashboard();
+    }, err => {
+      console.error(err);
+      toast("加载序列码失败，请检查 Firebase 配置", "err");
+    });
+}
+
+async function addPublisherCode(entry) {
+  return db.collection("publisherCodes").add({
+    code: normalizeCode(entry.code),
+    label: String(entry.label || "").trim(),
+    enabled: entry.enabled !== false,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+async function updatePublisherCode(id, patch) {
+  const next = { ...patch };
+  if (next.code !== undefined) next.code = normalizeCode(next.code);
+  if (next.label !== undefined) next.label = String(next.label || "").trim();
+  return db.collection("publisherCodes").doc(id).update({
+    ...next,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+async function deletePublisherCode(id) {
+  return db.collection("publisherCodes").doc(id).delete();
 }
 
 async function addItem(item) {
@@ -308,7 +439,7 @@ function renderHome() {
         <div class="item-info">
           <div class="item-title">${esc(item.title || "未命名")}</div>
           <div class="item-meta">
-            <div class="item-price"><span class="currency">¥</span>${fmtPrice(item.price)}</div>
+            <div class="item-price"><span class="currency">$</span>${fmtPrice(item.price)}</div>
             <div class="item-cat">${esc(catLabel)}</div>
           </div>
           ${queueBadge}
@@ -383,6 +514,10 @@ function paintItem(item) {
   const statusClass = item.status || "available";
   const condition = item.condition ? esc(item.condition) : "—";
   const catLabel = (CATEGORIES.find(c => c.id === item.category) || {}).label || "—";
+  const ownerName = getItemOwnerName(item);
+  const ownerContact = getItemOwnerContact(item);
+  const ownerLabel = item.ownerType === "publisher" ? "认证发布者" : "店主";
+  const contactLabel = item.ownerType === "publisher" ? "发布者联系方式" : "店主联系方式";
 
   view.innerHTML = `
     <div class="container detail">
@@ -398,8 +533,8 @@ function paintItem(item) {
           <h1>${esc(item.title || "未命名")}</h1>
 
           <div class="price-row">
-            <div class="price-big"><span class="currency">¥</span>${fmtPrice(item.price)}</div>
-            ${item.originalPrice ? `<div class="price-original">原价 ¥${fmtPrice(item.originalPrice)}</div>` : ""}
+            <div class="price-big"><span class="currency">$</span>${fmtPrice(item.price)}</div>
+            ${item.originalPrice ? `<div class="price-original">原价 $${fmtPrice(item.originalPrice)}</div>` : ""}
             <span class="status-big ${statusClass}" style="margin-left:auto;">${STATUS_LABEL[item.status] || "在售"}</span>
           </div>
 
@@ -417,12 +552,22 @@ function paintItem(item) {
               <div class="val">${fmtTime(item.createdAt) || "—"}</div>
             </div>
             <div class="meta-item">
-              <div class="tiny">店主</div>
-              <div class="val">${esc(window.SELLER_NAME || "店主")}</div>
+              <div class="tiny">${ownerLabel}</div>
+              <div class="val">${esc(ownerName)}</div>
             </div>
           </div>
 
           <div class="description">${esc(item.description || "（暂无描述）")}</div>
+
+          ${ownerContact ? `
+            <div class="queue-box" style="margin-bottom:16px;">
+              <h3>${contactLabel}</h3>
+              <div style="font-size:1rem;color:var(--ink);word-break:break-word;">${esc(ownerContact)}</div>
+              <div class="queue-hint" style="padding-bottom:0;">
+                ${item.ownerType === "publisher" ? "这件物品由已验证过身份的发布者上架，联系时可以备注商品名。" : "如需直接联系店主，可以使用上面的联系方式。"}
+              </div>
+            </div>
+          ` : ""}
 
           <div class="queue-box" id="queue-box"></div>
 
@@ -708,12 +853,164 @@ async function submitComment(itemId) {
 window.submitComment = submitComment;
 
 // ==========================================================
+// VIEW: publisher
+// ==========================================================
+let publisherTab = "add";
+
+function renderPublisher() {
+  watchPublisherCodes();
+  if (!isPublisherMode()) { renderPublisherLogin(); return; }
+  renderPublisherDashboard();
+}
+
+function renderPublisherLogin() {
+  const codes = getPublisherCodes();
+  $("#view").innerHTML = `
+    <div class="container admin-wrap">
+      <div style="max-width:560px;margin:40px auto;">
+        <h1>发布者入口</h1>
+        <p class="lede">只有拿到你手动发放的序列码的人才能发布闲置。登录后发布的物品会绑定发布者身份和联系方式。</p>
+        <div class="field" style="margin-bottom:14px;">
+          <label>序列码</label>
+          <input type="text" id="p-code" placeholder="输入你拿到的序列码" />
+        </div>
+        <div class="field" style="margin-bottom:14px;">
+          <label>你的称呼</label>
+          <input type="text" id="p-name" placeholder="真实姓名或方便识别的称呼" maxlength="30" />
+        </div>
+        <div class="field" style="margin-bottom:18px;">
+          <label>联系方式</label>
+          <input type="text" id="p-contact" placeholder="微信号 / email / 电话" maxlength="80" />
+        </div>
+        <button class="btn accent block" id="p-login">用序列码进入发布中心</button>
+        <div class="queue-hint" style="margin-top:16px;padding:0;">
+          当前已配置 ${codes.length} 个可用序列码。管理员可以在后台的“序列码管理”里随时新增、停用或删除。
+        </div>
+      </div>
+    </div>
+  `;
+  const attempt = () => {
+    const code = $("#p-code").value.trim();
+    const name = $("#p-name").value.trim();
+    const contact = $("#p-contact").value.trim();
+    const match = findPublisherCode(code);
+    if (!match) { toast("序列码无效或已停用", "err"); return; }
+    if (!name || !contact) { toast("请填写称呼和联系方式", "err"); return; }
+    savePublisherSession({
+      code: match.code,
+      publisherName: name,
+      publisherContact: contact,
+    });
+    toast("验证通过，可以开始发布了 ✓");
+    renderPublisherDashboard();
+  };
+  $("#p-login").onclick = attempt;
+  ["#p-code", "#p-name", "#p-contact"].forEach(sel => {
+    $(sel).onkeydown = (e) => { if (e.key === "Enter") attempt(); };
+  });
+}
+
+function renderPublisherDashboard() {
+  const session = getActivePublisherSession();
+  if (!session) { renderPublisherLogin(); return; }
+  const ownItems = state.items.filter(item => isPublisherItemOwner(item, session));
+  $("#view").innerHTML = `
+    <div class="container admin-wrap reveal">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
+        <div>
+          <h1>发布者中心</h1>
+          <p class="lede">欢迎你，${esc(session.publisherName)}。你可以发布自己的闲置，也可以回来看自己上架过的内容。</p>
+          <div class="queue-hint" style="padding:0;margin-top:-14px;">
+            当前序列码：<b>${esc(session.code)}</b>${session.label ? ` · ${esc(session.label)}` : ""} · 联系方式：${esc(session.publisherContact)}
+          </div>
+        </div>
+        <button class="btn ghost small" onclick="publisherLogout()">退出</button>
+      </div>
+      <div class="admin-tabs">
+        <button class="tab ${publisherTab === 'add' ? 'active' : ''}" data-p="add">+ 发布闲置</button>
+        <button class="tab ${publisherTab === 'items' ? 'active' : ''}" data-p="items">我的物品 (${ownItems.length})</button>
+      </div>
+      <div id="admin-body"></div>
+    </div>
+  `;
+  $$("[data-p]").forEach(t => {
+    t.onclick = () => { publisherTab = t.dataset.p; renderPublisherDashboard(); };
+  });
+  if (publisherTab === "items") renderPublisherItems();
+  else renderAdminAdd(null, { mode: "publisher", session });
+}
+
+function publisherLogout() {
+  clearPublisherSession();
+  toast("已退出发布者中心");
+  navigate("/");
+}
+window.publisherLogout = publisherLogout;
+
+function renderPublisherItems() {
+  const body = $("#admin-body");
+  const session = getActivePublisherSession();
+  if (!session) { renderPublisherLogin(); return; }
+  const items = state.items.filter(item => isPublisherItemOwner(item, session));
+  if (!items.length) {
+    body.innerHTML = `<div class="empty"><h3>你还没有发布任何物品</h3><p>去 “+ 发布闲置” 页面发第一件吧。</p></div>`;
+    return;
+  }
+  body.innerHTML = `<div class="admin-items">${items.map(item => {
+    const cover = (item.photos && item.photos[0]) || "";
+    return `
+      <div class="admin-item">
+        <div class="admin-item-thumb">${cover ? `<img src="${cover}" />` : ""}</div>
+        <div class="admin-item-info">
+          <div class="t">${esc(item.title)}</div>
+          <div class="m">
+            <span>${item.ownerType === "publisher" ? "发布者" : "管理员"}：${esc(getItemOwnerName(item))}</span>
+            <span>·</span>
+            <span>$${fmtPrice(item.price)}</span>
+            <span>·</span>
+            <span>${STATUS_LABEL[item.status] || "在售"}</span>
+            ${item.queueCount ? `<span>·</span><span>${item.queueCount} 人排队</span>` : ""}
+          </div>
+        </div>
+        <div class="admin-item-actions">
+          <button class="btn ghost small" onclick="navigate('/item/${item.id}')">查看</button>
+          <button class="btn ghost small" data-own-edit="${item.id}">编辑</button>
+          <button class="btn ghost small" data-own-del="${item.id}" style="color:var(--accent-dark);">删除</button>
+        </div>
+      </div>
+    `;
+  }).join("")}</div>`;
+  $$("[data-own-edit]").forEach(b => {
+    b.onclick = () => {
+      const item = state.items.find(i => i.id === b.dataset.ownEdit);
+      if (!item || !isPublisherItemOwner(item, session)) return;
+      publisherTab = "add";
+      renderPublisherDashboard();
+      setTimeout(() => renderAdminAdd(item, { mode: "publisher", session }), 10);
+    };
+  });
+  $$("[data-own-del]").forEach(b => {
+    b.onclick = async () => {
+      const item = state.items.find(i => i.id === b.dataset.ownDel);
+      if (!item || !isPublisherItemOwner(item, session)) return;
+      if (!confirm("确定删除这件物品？相关留言和排队记录也会一起删除。")) return;
+      try {
+        await deleteItem(item.id);
+        toast("已删除");
+      } catch (e) {
+        console.error(e);
+        toast("删除失败", "err");
+      }
+    };
+  });
+}
+
+// ==========================================================
 // VIEW: admin
 // ==========================================================
-const ADMIN_KEY = "xiaopu_admin_ok";
-function isAdminMode() { return localStorage.getItem(ADMIN_KEY) === "1"; }
 
 function renderAdmin() {
+  watchPublisherCodes();
   if (!isAdminMode()) { renderAdminLogin(); return; }
   renderAdminDashboard();
 }
@@ -749,6 +1046,7 @@ function renderAdminLogin() {
 let adminTab = "add";
 function renderAdminDashboard() {
   if (!isAdminMode()) { renderAdminLogin(); return; }
+  const codeCount = getPublisherCodes().length;
   $("#view").innerHTML = `
     <div class="container admin-wrap reveal">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
@@ -762,6 +1060,7 @@ function renderAdminDashboard() {
         <button class="tab ${adminTab === 'add' ? 'active' : ''}" data-t="add">+ 新上架</button>
         <button class="tab ${adminTab === 'items' ? 'active' : ''}" data-t="items">所有物品 (${state.items.length})</button>
         <button class="tab ${adminTab === 'queue' ? 'active' : ''}" data-t="queue">排队管理</button>
+        <button class="tab ${adminTab === 'codes' ? 'active' : ''}" data-t="codes">序列码管理 (${codeCount})</button>
       </div>
       <div id="admin-body"></div>
     </div>
@@ -772,6 +1071,7 @@ function renderAdminDashboard() {
   if (adminTab === "add") renderAdminAdd();
   else if (adminTab === "items") renderAdminItems();
   else if (adminTab === "queue") renderAdminQueue();
+  else if (adminTab === "codes") renderAdminPublisherCodes();
 }
 
 function adminLogout() {
@@ -784,9 +1084,14 @@ window.adminLogout = adminLogout;
 // ---- admin: add item (with edit support) ----
 let addPhotos = [];
 let editingId = null;
+let editorMode = "admin";
+let editorPublisherCode = "";
 
-function renderAdminAdd(existing = null) {
+function renderAdminAdd(existing = null, options = {}) {
   const body = $("#admin-body");
+  const mode = options.mode || "admin";
+  const session = options.session || getActivePublisherSession();
+  editorMode = mode;
   if (existing) {
     editingId = existing.id;
     addPhotos = Array.isArray(existing.photos) ? [...existing.photos] : [];
@@ -795,9 +1100,30 @@ function renderAdminAdd(existing = null) {
     addPhotos = [];
   }
   const current = existing || {};
+  const isPublisherEditor = mode === "publisher" || current.ownerType === "publisher";
+  editorPublisherCode = isPublisherEditor ? (mode === "publisher" ? ((session && session.code) || "") : (current.publisherCode || "")) : "";
+  const ownerNameValue = current.publisherName || ((session && session.publisherName) || "");
+  const ownerContactValue = current.publisherContact || ((session && session.publisherContact) || "");
   body.innerHTML = `
     <div style="max-width:720px;">
       ${editingId ? `<div style="margin-bottom:14px;font-size:.9rem;color:var(--accent-dark);">正在编辑：<b>${esc(current.title || "")}</b> <span style="margin-left:10px;color:var(--ink-3);cursor:pointer;text-decoration:underline;" onclick="cancelEdit()">取消编辑</span></div>` : ""}
+
+      ${isPublisherEditor ? `
+        <div class="queue-box" style="margin-bottom:18px;">
+          <h3>发布者信息</h3>
+          <div class="field" style="margin-bottom:12px;">
+            <label>发布者称呼 *</label>
+            <input type="text" id="f-owner-name" maxlength="30" value="${esc(ownerNameValue)}" placeholder="方便别人识别你的称呼" />
+          </div>
+          <div class="field" style="margin-bottom:12px;">
+            <label>发布者联系方式 *</label>
+            <input type="text" id="f-owner-contact" maxlength="80" value="${esc(ownerContactValue)}" placeholder="微信号 / email / 电话" />
+          </div>
+          <div class="queue-hint" style="padding:0;">
+            序列码：<b>${esc(editorPublisherCode || "未设置")}</b>。发布者商品会在详情页展示这份联系方式，方便别人直接联系。
+          </div>
+        </div>
+      ` : ""}
 
       <div class="upload-area" id="drop">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
@@ -814,11 +1140,11 @@ function renderAdminAdd(existing = null) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
           <div class="field">
-            <label>价格 (¥)</label>
+            <label>价格 ($)</label>
             <input type="number" id="f-price" min="0" step="1" value="${current.price != null ? current.price : ""}" placeholder="留空表示面议" />
           </div>
           <div class="field">
-            <label>原价 (¥) · 选填</label>
+            <label>原价 ($) · 选填</label>
             <input type="number" id="f-original" min="0" step="1" value="${current.originalPrice || ""}" />
           </div>
         </div>
@@ -851,7 +1177,7 @@ function renderAdminAdd(existing = null) {
           <textarea id="f-desc" rows="6" placeholder="尺寸、购买时间、使用情况、是否可搬运、交易地点等…" maxlength="2000">${esc(current.description || "")}</textarea>
         </div>
         <div>
-          <button class="btn accent" id="f-save">${editingId ? "保存修改" : "上架这件物品"}</button>
+          <button class="btn accent" id="f-save">${editingId ? "保存修改" : (mode === "publisher" ? "发布这件闲置" : "上架这件物品")}</button>
           ${editingId ? `<button class="btn ghost" style="margin-left:8px;" onclick="cancelEdit()">取消</button>` : ""}
         </div>
       </div>
@@ -923,6 +1249,23 @@ async function doSaveItem() {
     description: $("#f-desc").value.trim(),
     photos: addPhotos,
   };
+  if (editorMode === "publisher" || editorPublisherCode || ($("#f-owner-name") && $("#f-owner-contact"))) {
+    const publisherName = ($("#f-owner-name") && $("#f-owner-name").value.trim()) || "";
+    const publisherContact = ($("#f-owner-contact") && $("#f-owner-contact").value.trim()) || "";
+    if (!publisherName || !publisherContact) {
+      toast("发布者必须填写称呼和联系方式", "err");
+      return;
+    }
+    payload.ownerType = "publisher";
+    payload.publisherCode = editorPublisherCode;
+    payload.publisherName = publisherName;
+    payload.publisherContact = publisherContact;
+  } else {
+    payload.ownerType = "admin";
+    payload.publisherCode = null;
+    payload.publisherName = null;
+    payload.publisherContact = null;
+  }
   const btn = $("#f-save");
   btn.disabled = true;
   btn.textContent = "保存中…";
@@ -932,26 +1275,172 @@ async function doSaveItem() {
       toast("已更新 ✓");
     } else {
       await addItem(payload);
-      toast("上架成功 ✓");
+      toast(editorMode === "publisher" ? "发布成功 ✓" : "上架成功 ✓");
       addPhotos = [];
     }
     editingId = null;
-    adminTab = "items";
-    renderAdminDashboard();
+    if (editorMode === "publisher") {
+      publisherTab = "items";
+      renderPublisherDashboard();
+    } else {
+      adminTab = "items";
+      renderAdminDashboard();
+    }
   } catch (e) {
     console.error(e);
     toast("保存失败：" + (e.message || "未知错误"), "err");
     btn.disabled = false;
-    btn.textContent = editingId ? "保存修改" : "上架这件物品";
+    btn.textContent = editingId ? "保存修改" : (editorMode === "publisher" ? "发布这件闲置" : "上架这件物品");
   }
 }
 
 function cancelEdit() {
   editingId = null;
   addPhotos = [];
-  renderAdminAdd();
+  if (editorMode === "publisher") renderPublisherDashboard();
+  else renderAdminAdd();
 }
 window.cancelEdit = cancelEdit;
+
+// ---- admin: publisher codes ----
+function renderAdminPublisherCodes() {
+  const body = $("#admin-body");
+  const codes = getPublisherCodes();
+  const usingFallback = !state.publisherCodesLoaded;
+  body.innerHTML = `
+    <div style="max-width:860px;">
+      <div class="queue-box" style="margin-bottom:18px;">
+        <h3>新增序列码</h3>
+        <div class="field" style="margin-bottom:12px;">
+          <label>序列码 *</label>
+          <input type="text" id="pc-code" placeholder="例如 EASY-SELL-003" maxlength="60" />
+        </div>
+        <div class="field" style="margin-bottom:12px;">
+          <label>备注 / 指定对象</label>
+          <input type="text" id="pc-label" placeholder="例如 张三 / 宿舍楼管理员 / 校友群第 2 批" maxlength="60" />
+        </div>
+        <button class="btn accent" id="pc-create">创建序列码</button>
+        <div class="queue-hint" style="padding:0;margin-top:12px;">
+          ${usingFallback
+            ? "当前显示的是 index.html 里的默认序列码。你在这里新增后，后续会优先使用 Firestore 里的动态序列码列表。"
+            : "这里的改动会实时写入 Firestore，发布者登录页会立即生效。"}
+        </div>
+      </div>
+
+      <div class="admin-items">
+        ${codes.length ? codes.map(code => {
+          const usageCount = state.items.filter(item =>
+            item.ownerType === "publisher" && normalizeCode(item.publisherCode) === normalizeCode(code.code)
+          ).length;
+          const statusText = code.enabled ? "启用中" : "已停用";
+          const statusColor = code.enabled ? "var(--sage)" : "var(--accent-dark)";
+          const canMutate = !String(code.id || "").startsWith("default-");
+          return `
+            <div class="admin-item" style="grid-template-columns:1fr auto;">
+              <div class="admin-item-info">
+                <div class="t">${esc(code.code)}</div>
+                <div class="m">
+                  <span style="color:${statusColor};">${statusText}</span>
+                  <span>·</span>
+                  <span>${usageCount} 件物品在用</span>
+                  ${code.label ? `<span>·</span><span>${esc(code.label)}</span>` : ""}
+                </div>
+              </div>
+              <div class="admin-item-actions">
+                ${canMutate ? `
+                  <button class="btn ghost small" data-code-toggle="${code.id}">
+                    ${code.enabled ? "停用" : "启用"}
+                  </button>
+                  <button class="btn ghost small" data-code-edit="${code.id}">改备注</button>
+                  <button class="btn ghost small" data-code-del="${code.id}" style="color:var(--accent-dark);">删除</button>
+                ` : `
+                  <span class="tiny" style="color:var(--ink-3);">默认码请改 index.html</span>
+                `}
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="empty"><h3>还没有可用序列码</h3><p>先创建一个，再发给你验证过身份的发布者。</p></div>`}
+      </div>
+    </div>
+  `;
+
+  const createBtn = $("#pc-create");
+  if (createBtn) {
+    createBtn.onclick = async () => {
+      const code = normalizeCode($("#pc-code").value);
+      const label = $("#pc-label").value.trim();
+      if (!code) { toast("请先填写序列码", "err"); return; }
+      if (getPublisherCodes().some(entry => normalizeCode(entry.code) === code)) {
+        toast("这个序列码已经存在了", "err");
+        return;
+      }
+      createBtn.disabled = true;
+      createBtn.textContent = "创建中...";
+      try {
+        await addPublisherCode({ code, label, enabled: true });
+        $("#pc-code").value = "";
+        $("#pc-label").value = "";
+        toast("序列码已创建 ✓");
+      } catch (e) {
+        console.error(e);
+        toast("创建失败", "err");
+        createBtn.disabled = false;
+        createBtn.textContent = "创建序列码";
+      }
+    };
+  }
+
+  $$("[data-code-toggle]").forEach(btn => {
+    btn.onclick = async () => {
+      const current = codes.find(code => code.id === btn.dataset.codeToggle);
+      if (!current) return;
+      try {
+        await updatePublisherCode(current.id, { enabled: !current.enabled });
+        toast(current.enabled ? "序列码已停用" : "序列码已启用");
+      } catch (e) {
+        console.error(e);
+        toast("操作失败", "err");
+      }
+    };
+  });
+
+  $$("[data-code-edit]").forEach(btn => {
+    btn.onclick = async () => {
+      const current = codes.find(code => code.id === btn.dataset.codeEdit);
+      if (!current) return;
+      const nextLabel = prompt("修改这个序列码的备注", current.label || "");
+      if (nextLabel === null) return;
+      try {
+        await updatePublisherCode(current.id, { label: nextLabel });
+        toast("备注已更新");
+      } catch (e) {
+        console.error(e);
+        toast("更新失败", "err");
+      }
+    };
+  });
+
+  $$("[data-code-del]").forEach(btn => {
+    btn.onclick = async () => {
+      const current = codes.find(code => code.id === btn.dataset.codeDel);
+      if (!current) return;
+      const usageCount = state.items.filter(item =>
+        item.ownerType === "publisher" && normalizeCode(item.publisherCode) === normalizeCode(current.code)
+      ).length;
+      const message = usageCount > 0
+        ? `这个序列码下还有 ${usageCount} 件已发布物品。删除后这些旧物品仍会保留，但不能再用这个码登录。确定删除吗？`
+        : "确定删除这个序列码吗？";
+      if (!confirm(message)) return;
+      try {
+        await deletePublisherCode(current.id);
+        toast("序列码已删除");
+      } catch (e) {
+        console.error(e);
+        toast("删除失败", "err");
+      }
+    };
+  });
+}
 
 // ---- admin: items list ----
 function renderAdminItems() {
@@ -968,7 +1457,7 @@ function renderAdminItems() {
         <div class="admin-item-info">
           <div class="t">${esc(item.title)}</div>
           <div class="m">
-            <span>¥${fmtPrice(item.price)}</span>
+            <span>$${fmtPrice(item.price)}</span>
             <span>·</span>
             <span>${STATUS_LABEL[item.status] || "在售"}</span>
             ${item.queueCount ? `<span>·</span><span>${item.queueCount} 人排队</span>` : ""}
@@ -1017,7 +1506,7 @@ async function renderAdminQueue() {
     const card = el(`<div class="admin-queue-box" data-item="${item.id}">
       <h3>
         <span>${esc(item.title)}</span>
-        <span style="font-size:.75rem;color:var(--ink-3);font-weight:400;">¥${fmtPrice(item.price)} · ${STATUS_LABEL[item.status]}</span>
+        <span style="font-size:.75rem;color:var(--ink-3);font-weight:400;">$${fmtPrice(item.price)} · ${STATUS_LABEL[item.status]}</span>
         <button class="btn ghost small" style="margin-left:auto;" onclick="navigate('/item/${item.id}')">查看页面</button>
       </h3>
       <div class="admin-queue-list" id="aq-${item.id}">加载中…</div>
@@ -1129,6 +1618,11 @@ route(/^\/admin$/, async () => {
   if (!CONFIGURED) { renderSetup(); return; }
   watchItems();
   renderAdmin();
+});
+route(/^\/publish$/, async () => {
+  if (!CONFIGURED) { renderSetup(); return; }
+  watchItems();
+  renderPublisher();
 });
 
 // ==========================================================
