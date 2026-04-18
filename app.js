@@ -1356,7 +1356,7 @@ function renderAdminAdd(existing = null, options = {}) {
       <div class="upload-area" id="drop">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
         <div class="big">点击或拖入图片</div>
-        <div class="hint">最多 8 张 · 第一张为封面 · 会自动压缩</div>
+        <div class="hint">最多 4 张 · 至少 1 张 · 第一张为封面 · 会自动压缩</div>
         <input type="file" id="file-in" accept="image/*" multiple style="display:none;" />
       </div>
       <div class="photo-previews" id="photo-previews"></div>
@@ -1493,8 +1493,8 @@ async function requestApproxLocation() {
 
 async function handleFiles(files) {
   files = files.filter(f => f.type.startsWith("image/"));
-  const remaining = 8 - addPhotos.length;
-  if (remaining <= 0) { toast("最多 8 张图", "err"); return; }
+  const remaining = 4 - addPhotos.length;
+  if (remaining <= 0) { toast("最多 4 张图", "err"); return; }
   files = files.slice(0, remaining);
   for (const f of files) {
     try {
@@ -1527,6 +1527,7 @@ function paintPreviews() {
 async function doSaveItem() {
   const title = $("#f-title").value.trim();
   if (!title) { toast("至少要填标题", "err"); return; }
+  if (!addPhotos.length) { toast("至少上传 1 张图片", "err"); return; }
   const priceRaw = $("#f-price").value;
   const originalRaw = $("#f-original").value;
   const payload = {
