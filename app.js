@@ -685,6 +685,15 @@ function paintQueue(itemId, queue) {
   if (!box) return;
   const current = queue.find(q => q.status === "active");
   const waiting = queue.filter(q => q.status !== "active");
+  const renderQueueNote = (q) => {
+    if (!q.note) return "";
+    return `
+      <details class="queue-note-toggle">
+        <summary>查看想说的话</summary>
+        <div class="queue-note-text">${esc(q.note)}</div>
+      </details>
+    `;
+  };
 
   box.innerHTML = `
     <h3>排队情况 <span class="count">${queue.length} 人</span></h3>
@@ -693,9 +702,14 @@ function paintQueue(itemId, queue) {
       ${current ? `
         <div class="queue-item active">
           <span class="queue-pos" style="background:rgba(255,255,255,.25);color:#fff;">洽</span>
-          <span class="queue-name">${esc(current.name)}</span>
-          <span class="queue-contact">${esc(current.contact || "")}</span>
-          <span class="queue-time">${fmtTime(current.joinedAt)}</span>
+          <div class="queue-item-body">
+            <div class="queue-item-main">
+              <span class="queue-name">${esc(current.name)}</span>
+              <span class="queue-contact">${esc(current.contact || "")}</span>
+              <span class="queue-time">${fmtTime(current.joinedAt)}</span>
+            </div>
+            ${renderQueueNote(current)}
+          </div>
         </div>
       ` : ""}
       ${waiting.map((q, i) => {
@@ -703,9 +717,14 @@ function paintQueue(itemId, queue) {
         return `
         <div class="queue-item">
           <span class="queue-pos">${pos}</span>
-          <span class="queue-name">${esc(q.name)}</span>
-          <span class="queue-contact">${esc(q.contact || "")}</span>
-          <span class="queue-time">${fmtTime(q.joinedAt)}</span>
+          <div class="queue-item-body">
+            <div class="queue-item-main">
+              <span class="queue-name">${esc(q.name)}</span>
+              <span class="queue-contact">${esc(q.contact || "")}</span>
+              <span class="queue-time">${fmtTime(q.joinedAt)}</span>
+            </div>
+            ${renderQueueNote(q)}
+          </div>
         </div>
       `;
       }).join("")}
